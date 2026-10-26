@@ -1,8 +1,9 @@
 # Ordinary CUDA baseline for the inventoried RTX 3080
 
-**Development status: source implementation and host-only verification. Native
-CUDA compilation and GPU execution have not been validated in this contribution.**
-See [VALIDATION.md](VALIDATION.md) for commands actually run and remaining gates.
+**Development status: native CUDA compilation and metadata inspection passed.
+A completed GPU benchmark is still pending.**
+See [NATIVE-VALIDATION.md](NATIVE-VALIDATION.md) for the current follow-up and
+[VALIDATION.md](VALIDATION.md) for the initial CPU-only checks.
 
 This is a separate protocol-3 benchmark for the configuration documented in
 [research PR #39](https://github.com/impacifist/Windows-GPU-UNLOCK/pull/39).
@@ -75,9 +76,10 @@ last. Licence files are retained, and no installer or driver change is involved.
 The [CUDA 12.6 Windows compiler table](https://docs.nvidia.com/cuda/archive/12.6.0/cuda-installation-guide-microsoft-windows/index.html)
 lists MSVC 192x/193x. The build script requires an existing x64 MSVC 14.2x/14.3x
 environment, with optional `-VcVarsPath` and `-MsvcToolset` selection. It has
-no unsupported-compiler override. The inventory machine currently has only
-MSVC 14.44 enumerated, so its compatible CUDA build configuration remains
-unresolved. No compiler installation is performed by these scripts.
+no unsupported-compiler override. The authorized native follow-up added toolset
+14.29.30133 alongside the existing compiler and built successfully with compiler
+19.29.30159.0. Select it explicitly with `-MsvcToolset 14.29`; `-VcVarsPath`
+selects the intended installation. These scripts do not install compilers.
 
 A successful build places the executable and two cuBLAS DLLs in `bin/`, then
 writes `build-manifest.json` last. The manifest records source/artifact hashes,
@@ -99,10 +101,18 @@ The default command verifies the exact artifact/source manifest offline. It
 does not launch the native program, query NVIDIA SMI or create result files.
 Before a build exists, it refuses because the required manifest is absent.
 
-Only `run.py --execute` requests ordinary GPU computation. That execution was
-not authorized or performed for this contribution. It first checks the manifest,
-allowed environment and exact GPU identity, then applies entry thresholds of
-5% utilization, 2048 MiB used memory and 65 C. Immediately before each native
+Only `run.py --execute` requests ordinary GPU computation. The native follow-up
+was explicitly authorized by the owner. It first checks the manifest, allowed
+environment and exact GPU identity, then applies the selected entry profile:
+
+| Profile | Maximum utilization | Maximum allocated GPU memory | Maximum temperature |
+|---|---:|---:|---:|
+| `quiet` (default) | 5% | 2048 MiB | 65 C |
+| `desktop` (`--execute --profile desktop`) | 5% | 3072 MiB | 65 C |
+
+The desktop profile accommodates the inventoried desktop's ambient allocations.
+Its name and exact limits are recorded in context schema 2 and verified offline;
+identify the profile when publishing results. Immediately before each native
 launch it also requires at least 1 GiB of available host RAM, measured through
 the read-only Windows memory-status API. Those are test-policy thresholds,
 not hardware ratings. Each trial has a pre/post GPU telemetry snapshot and a

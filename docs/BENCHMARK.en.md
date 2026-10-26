@@ -6,9 +6,9 @@
 
 The separate [ordinary RTX 3080 baseline](../benchmark/rtx3080/README.md)
 targets the inventoried 10 GiB card with a stricter numerical/result protocol.
-It currently has host-only verification; native CUDA compilation and GPU
-execution remain unvalidated. See its
-[validation record](../benchmark/rtx3080/VALIDATION.md) before using it.
+Its native CUDA build and metadata inspection have passed; GPU measurement
+validation remains pending. See its
+[native validation record](../benchmark/rtx3080/NATIVE-VALIDATION.md) before using it.
 It adds no firmware or unlock support. The commands and historical comparisons
 below continue to apply to the existing 3090, 3090 Ti and 3070 Ti benchmarks.
 

@@ -1,8 +1,10 @@
-# Validation record for the ordinary RTX 3080 baseline
+# Initial offline validation record for the ordinary RTX 3080 baseline
 
 Date: 2026-10-26 UTC.
 
-**Status: source implementation with host-only verification. No native CUDA compilation, GPU benchmark execution or measured performance result is included.**
+**Historical snapshot before native execution was authorized:** source
+implementation with host-only verification. The later build and execution work
+is recorded in [NATIVE-VALIDATION.md](NATIVE-VALIDATION.md).
 
 This contribution starts from upstream commit `5c98f11eaafdcb7a2a06fb14fcdcde7297eb409e` and is separate from [research PR #39](https://github.com/impacifist/Windows-GPU-UNLOCK/pull/39). That research does not establish unlock support.
 
@@ -83,7 +85,7 @@ The archives themselves have not been downloaded, installed or compiled against.
 Synthetic archive tests do not verify NVIDIA's real archive layout or runtime
 DLL behavior.
 
-The current host compiler inventory lists only MSVC 14.44.35207. The
+The initial host compiler inventory listed only MSVC 14.44.35207. The
 readiness check found the compiler setup script, no accepted 14.2x/14.3x
 toolsets, no project CUDA packages and no ambient compiler-option overrides. The
 [CUDA 12.6.0 Windows guide](https://docs.nvidia.com/cuda/archive/12.6.0/cuda-installation-guide-microsoft-windows/index.html)
@@ -92,7 +94,7 @@ maps MSVC 14.44 to 1944. The build script provides no unsupported-compiler overr
 A supported x64 compiler configuration must be established before validating
 a native build.
 
-## Remaining evidence gates
+## Evidence gates at the initial checkpoint
 
 1. Verify the real pinned package extraction and build with a documented compatible host compiler, retaining exact build provenance.
 2. Review the built artifacts and execution policy before requesting the separately authorized ordinary GPU run required by the adopted contribution guide. No such execution authorization is inferred from source-work approval.

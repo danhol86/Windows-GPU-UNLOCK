@@ -53,7 +53,7 @@ class Fixture(unittest.TestCase):
             runner.run(self.root,execute=True,launcher=mock.Mock(side_effect=AssertionError("process started")),nvidia="mock-nvidia")
         if code:
             self.assertEqual(caught.exception.code,code)
-    def successful_launcher(self):
+    def successful_launcher(self,**telemetry_changes):
         self.launches=[]; self.native_count=0; self.query_count=0
         def launch(argv,**kw):
             self.launches.append((argv,kw))
@@ -67,7 +67,7 @@ class Fixture(unittest.TestCase):
             self.query_count+=1
             self.assertLessEqual(kw["timeout_seconds"],10)
             self.assertIn("--format=csv,noheader,nounits",argv)
-            return runner.ProcessResult(0,telemetry(),"",0.001)
+            return runner.ProcessResult(0,telemetry(**telemetry_changes),"",0.001)
         return launch
     def only_result(self):
         values=list((self.root/"results").iterdir())
@@ -80,6 +80,8 @@ class ManifestTests(Fixture):
         with mock.patch.object(runner.subprocess,"Popen",side_effect=AssertionError("forbidden")):
             result=runner.run(self.root,launcher=launch)
         self.assertEqual(result["status"],"offline-artifacts-verified")
+        self.assertEqual(result["entry_profile"],"quiet")
+        self.assertEqual(result["entry_limits"]["max_memory_used_mib"],2048)
         self.assertFalse(result["gpu_workload_run"])
         self.assertFalse((self.root/"results").exists())
         launch.assert_not_called()
@@ -215,12 +217,15 @@ class ExecutionTests(Fixture):
         folder=self.only_result()
         complete=json.loads((folder/"complete.json").read_text())
         self.assertEqual(complete["trial_count"],3)
+        self.assertEqual(complete["schema_version"],1)
         for f in complete["files"]:
             self.assertEqual(runner.sha256(folder/f["path"]),f["sha256"])
         context=(folder/"context.json").read_text()
         self.assertNotIn(str(self.repo),context)
         self.assertNotIn("mock-nvidia",context)
         self.assertEqual(len(json.loads(context)["trials"]),3)
+        self.assertEqual(json.loads(context)["schema_version"],2)
+        self.assertEqual(json.loads(context)["entry_profile"],"quiet")
     def test_settings_change_during_run_leaves_no_completion(self):
         launch=self.successful_launcher()
         def changed(argv,**kwargs):
@@ -327,6 +332,68 @@ class ExecutionTests(Fixture):
                 runner._trial_identity(changed)
         trial["runtime"]["cuda_driver"]=13000
         runner._trial_identity(trial)
+
+class EntryProfileTests(Fixture):
+    def test_desktop_2136_mib_completes_and_verifies_with_explicit_profile(self):
+        result=runner.run(self.root,execute=True,profile="desktop",
+            launcher=self.successful_launcher(**{"memory.used":2136}),nvidia="mock-nvidia")
+        self.assertEqual((self.native_count,self.query_count),(3,6))
+        self.assertEqual(result["entry_profile"],"desktop")
+        folder=self.only_result()
+        context=json.loads((folder/"context.json").read_text())
+        self.assertEqual(context["schema_version"],2)
+        self.assertEqual(context["entry_profile"],"desktop")
+        self.assertEqual(context["entry_limits"],runner.entry_limits("desktop"))
+        checked=runner.verify_completed_run(folder)
+        self.assertEqual(checked["entry_profile"],"desktop")
+        self.assertEqual(checked["entry_limits"]["max_memory_used_mib"],3072)
+    def test_default_quiet_still_rejects_2136_mib(self):
+        with self.assertRaisesRegex(runner.RunnerError,"entry_not_quiet"):
+            runner.run(self.root,execute=True,
+                launcher=self.successful_launcher(**{"memory.used":2136}),nvidia="mock-nvidia")
+        self.assertEqual((self.native_count,self.query_count),(0,1))
+        self.assertFalse((self.only_result()/"complete.json").exists())
+    def test_desktop_rejects_3073_mib_before_native_work(self):
+        with self.assertRaisesRegex(runner.RunnerError,"entry_profile_limits_exceeded"):
+            runner.run(self.root,execute=True,profile="desktop",
+                launcher=self.successful_launcher(**{"memory.used":3073}),nvidia="mock-nvidia")
+        self.assertEqual((self.native_count,self.query_count),(0,1))
+        self.assertFalse((self.only_result()/"complete.json").exists())
+    def test_profile_thresholds_include_exact_boundaries(self):
+        for profile,memory in (("quiet",2048),("desktop",3072)):
+            runner.require_entry(runner.parse_telemetry(telemetry(
+                **{"utilization.gpu":5,"memory.used":memory,"temperature.gpu":65})),profile)
+    def test_both_profiles_keep_utilization_and_temperature_gates(self):
+        for profile in ("quiet","desktop"):
+            for values in ({"utilization.gpu":6},{"temperature.gpu":66}):
+                with self.subTest(profile=profile,values=values), self.assertRaises(runner.RunnerError):
+                    runner.run(self.root,execute=True,profile=profile,
+                        launcher=self.successful_launcher(**values),nvidia="mock-nvidia")
+                self.assertEqual((self.native_count,self.query_count),(0,1))
+    def test_unknown_and_malformed_profiles_refused_before_any_query(self):
+        launch=mock.Mock(side_effect=AssertionError("query forbidden"))
+        for profile in ("","Desktop","quiet ",None,True,{},["quiet"]):
+            with self.subTest(profile=profile):
+                with self.assertRaisesRegex(runner.RunnerError,"invalid_entry_profile"):
+                    runner.run(self.root,execute=True,profile=profile,launcher=launch,nvidia="mock-nvidia")
+                with self.assertRaisesRegex(runner.RunnerError,"invalid_entry_profile"):
+                    runner.execute_baseline({},profile=profile,launcher=launch,nvidia="mock-nvidia")
+        launch.assert_not_called()
+        self.assertFalse((self.root/"results").exists())
+    def test_desktop_cli_without_execute_is_offline(self):
+        with mock.patch.object(runner,"__file__",str(self.root/"run.py")), \
+                mock.patch.object(runner.subprocess,"Popen",side_effect=AssertionError("forbidden")), \
+                mock.patch.object(runner.sys,"stdout",new_callable=io.StringIO) as stdout:
+            self.assertEqual(runner.main(["--profile","desktop"]),0)
+        result=json.loads(stdout.getvalue())
+        self.assertEqual(result["entry_profile"],"desktop")
+        self.assertFalse(result["gpu_workload_run"])
+        self.assertFalse((self.root/"results").exists())
+    def test_cli_unknown_profile_is_rejected(self):
+        with mock.patch.object(runner,"run",side_effect=AssertionError("forbidden")), \
+                mock.patch.object(runner.sys,"stderr",new_callable=io.StringIO), self.assertRaises(SystemExit) as caught:
+            runner.main(["--execute","--profile","unknown"])
+        self.assertEqual(caught.exception.code,2)
 
 class SavedBundleTests(Fixture):
     def setUp(self):
@@ -447,6 +514,43 @@ class SavedBundleTests(Fixture):
         with mock.patch.object(runner.sys,"stdout",new_callable=io.StringIO) as stdout:
             self.assertEqual(runner.main(["--verify-run",str(self.folder)]),2)
         self.assertEqual(json.loads(stdout.getvalue()),{"status":"refused","reason":"invalid_json"})
+    def test_profile_tampering_is_refused_before_and_after_rehash(self):
+        context=json.loads((self.folder/"context.json").read_text())
+        context["entry_profile"]="desktop"
+        runner.atomic_json(self.folder/"context.json",context)
+        self.assert_invalid("manifest_hash_mismatch")
+        self.rewrite("context.json",lambda d:None)
+        self.assert_invalid("invalid_entry_limits")
+    def test_rehashed_profiles_and_limits_require_exact_whitelist(self):
+        original=(self.folder/"context.json").read_bytes()
+        marker=(self.folder/"complete.json").read_bytes()
+        changes=(lambda d:d.update(entry_profile="unknown"),
+            lambda d:d.update(entry_profile={"name":"quiet"}),
+            lambda d:d.update(entry_profile=True),
+            lambda d:d["entry_limits"].update(max_memory_used_mib=3072),
+            lambda d:d["entry_limits"].update(max_utilization_percent=100),
+            lambda d:d["entry_limits"].update(max_temperature_celsius=66),
+            lambda d:d["entry_limits"].update(max_memory_used_mib=2048.0),
+            lambda d:d["entry_limits"].update(extra_limit=1),
+            lambda d:d.pop("entry_profile"),
+            lambda d:d.update(schema_version=1))
+        for change in changes:
+            self.rewrite("context.json",change)
+            self.assert_invalid()
+            (self.folder/"context.json").write_bytes(original)
+            (self.folder/"complete.json").write_bytes(marker)
+    def test_saved_admission_uses_recorded_profile_and_cannot_claim_quiet_at_2136(self):
+        def desktop_context(d):
+            d["entry_profile"]="desktop"
+            d["entry_limits"]=runner.entry_limits("desktop")
+            for observation in d["trials"]:
+                observation["before"]["memory_used_mib"]=2136
+                observation["after"]["memory_used_mib"]=2136
+        self.rewrite("context.json",desktop_context)
+        self.assertEqual(runner.verify_completed_run(self.folder)["entry_profile"],"desktop")
+        self.rewrite("context.json",lambda d:d.update(
+            entry_profile="quiet",entry_limits=runner.entry_limits("quiet")))
+        self.assert_invalid("entry_not_quiet")
 
 class OwnedPythonChildTests(unittest.TestCase):
     def call(self,code,seconds=5,stdout=4096,stderr=4096):

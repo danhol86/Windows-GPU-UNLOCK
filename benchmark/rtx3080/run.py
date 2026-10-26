@@ -33,6 +33,10 @@ FIELDS = ("name","pci.bus_id","pci.device_id","pci.sub_device_id","memory.total"
 STDOUT_LIMIT = 2 * 1024 * 1024
 STDERR_LIMIT = 64 * 1024
 MIN_HOST_MEMORY = 1024**3
+ENTRY_PROFILES = {
+    "quiet":{"max_utilization_percent":5,"max_memory_used_mib":2048,"max_temperature_celsius":65},
+    "desktop":{"max_utilization_percent":5,"max_memory_used_mib":3072,"max_temperature_celsius":65},
+}
 REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 class RunnerError(ValueError):
@@ -356,9 +360,20 @@ def settings_identity(s):
     return {k:s[k] for k in ("gpu_name","pci_bus_id","pci_device_id","pci_subsystem_id",
         "memory_total_mib","driver_version","power_limit_watts","maximum_sm_clock_mhz","maximum_memory_clock_mhz")}
 
+def entry_limits(profile):
+    if type(profile) is not str or profile not in ENTRY_PROFILES:
+        raise RunnerError("invalid_entry_profile")
+    return dict(ENTRY_PROFILES[profile])
+
+def require_entry(s,profile="quiet"):
+    limits=entry_limits(profile)
+    if (s["utilization_percent"]>limits["max_utilization_percent"]
+        or s["memory_used_mib"]>limits["max_memory_used_mib"]
+        or s["temperature_celsius"]>limits["max_temperature_celsius"]):
+        raise RunnerError("entry_not_quiet" if profile=="quiet" else "entry_profile_limits_exceeded")
+
 def require_quiet(s):
-    if s["utilization_percent"]>5 or s["memory_used_mib"]>2048 or s["temperature_celsius"]>65:
-        raise RunnerError("entry_not_quiet")
+    require_entry(s,"quiet")
 
 def _ok(p):
     if p.returncode!=0:
@@ -464,7 +479,8 @@ def require_host_memory(value):
     if type(value) is not int or not MIN_HOST_MEMORY<=value<2**64:
         raise RunnerError("insufficient_or_unknown_host_memory")
 
-def execute_baseline(verified,*,launcher=run_process,nvidia=None,clock=time.monotonic,utc=utc_now):
+def execute_baseline(verified,*,profile="quiet",launcher=run_process,nvidia=None,clock=time.monotonic,utc=utc_now):
+    limits=entry_limits(profile)
     environment=capture_environment()
     nvidia=nvidia or shutil.which("nvidia-smi.exe")
     if not nvidia:
@@ -483,7 +499,7 @@ def execute_baseline(verified,*,launcher=run_process,nvidia=None,clock=time.mono
             _remaining(deadline,clock,120)
             phase="pre_query"
             before=_query(nvidia,root,launcher,deadline,clock,utc)
-            require_quiet(before)
+            require_entry(before,profile)
             if expected is None:
                 expected=settings_identity(before)
             elif settings_identity(before)!=expected:
@@ -527,7 +543,8 @@ def execute_baseline(verified,*,launcher=run_process,nvidia=None,clock=time.mono
             raise RunnerError("environment_changed_during_run")
         summary=result_protocol.summarize_trials(trials)
         data=verified["data"]
-        context={"schema_version":1,"benchmark_protocol":PROTOCOL,
+        context={"schema_version":2,"benchmark_protocol":PROTOCOL,
+            "entry_profile":profile,"entry_limits":limits,
             "build_manifest_sha256":verified["manifest_sha256"],
             "source_commit":data["source_commit"],"source_dirty":data["source_dirty"],
             "toolchain":data["toolchain"],"artifacts":data["artifacts"],"sources":data["sources"],
@@ -557,6 +574,7 @@ def execute_baseline(verified,*,launcher=run_process,nvidia=None,clock=time.mono
         # Completion is the final file mutation, only after all three trials pass.
         atomic_json(directory/"complete.json",completion)
         return {"status":"complete","benchmark_protocol":PROTOCOL,"gpu_workload_run":True,
+            "entry_profile":profile,"entry_limits":limits,
             "trial_count":3,"result_directory":directory.relative_to(root).as_posix()}
     except BaseException as e:
         code=e.code if isinstance(e,RunnerError) else "cancelled" if isinstance(e,KeyboardInterrupt) else "validation_or_io_failure"
@@ -570,17 +588,19 @@ def execute_baseline(verified,*,launcher=run_process,nvidia=None,clock=time.mono
             raise
         raise RunnerError("validation_or_io_failure") from e
 
-def run(root,*,execute=False,launcher=run_process,nvidia=None):
+def run(root,*,execute=False,profile="quiet",launcher=run_process,nvidia=None):
+    limits=entry_limits(profile)
     verified=verify_manifest(root)
     if not execute:
         d=verified["data"]
         return {"schema_version":1,"benchmark_protocol":PROTOCOL,"status":"offline-artifacts-verified",
+            "entry_profile":profile,"entry_limits":limits,
             "gpu_workload_run":False,"native_process_run":False,"execution_requested":False,
             "build_manifest_sha256":verified["manifest_sha256"],
             "source_commit":d["source_commit"],"source_dirty":d["source_dirty"],
             "toolchain":d["toolchain"],"artifacts":d["artifacts"],"sources":d["sources"],
             "limitation":"GPU identity, idle state and runtime operation were not queried; --execute is required for computation."}
-    return execute_baseline(verified,launcher=launcher,nvidia=nvidia)
+    return execute_baseline(verified,profile=profile,launcher=launcher,nvidia=nvidia)
 
 def _timestamp(value):
     if not isinstance(value,str) or not value.endswith("Z"):
@@ -650,11 +670,15 @@ def _read_bundle_json(directory,name,expected_hash=None):
 
 def _validate_context(context,trials,manifest_hash):
     fields={"schema_version","benchmark_protocol","build_manifest_sha256","source_commit",
-        "source_dirty","toolchain","artifacts","sources","execution","trials","limitations","environment"}
+        "source_dirty","toolchain","artifacts","sources","execution","trials","limitations","environment",
+        "entry_profile","entry_limits"}
     if not isinstance(context,dict) or set(context)!=fields:
         raise RunnerError("invalid_context_schema")
-    if type(context["schema_version"]) is not int or context["schema_version"]!=1 or type(context["benchmark_protocol"]) is not int or context["benchmark_protocol"]!=3:
+    if type(context["schema_version"]) is not int or context["schema_version"]!=2 or type(context["benchmark_protocol"]) is not int or context["benchmark_protocol"]!=3:
         raise RunnerError("invalid_context_schema")
+    limits=entry_limits(context["entry_profile"])
+    if not _same_json(context["entry_limits"],limits):
+        raise RunnerError("invalid_entry_limits")
     if context["build_manifest_sha256"]!=manifest_hash:
         raise RunnerError("context_manifest_hash_mismatch")
     if not isinstance(context["source_commit"],str) or not re.fullmatch(r"[0-9a-f]{40}",context["source_commit"]):
@@ -699,7 +723,7 @@ def _validate_context(context,trials,manifest_hash):
             raise RunnerError("inconsistent_trial_timestamps")
         previous=post_time
         before=_saved_snapshot(observation["before"]); after=_saved_snapshot(observation["after"])
-        require_quiet(before)
+        require_entry(before,context["entry_profile"])
         if expected is None:
             expected=settings_identity(before)
         if settings_identity(before)!=expected or settings_identity(after)!=expected:
@@ -753,6 +777,7 @@ def verify_completed_run(directory):
     if not _same_json(marker,_read_bundle_json(directory,"complete.json")):
         raise RunnerError("completion_changed_during_verification")
     return {"schema_version":1,"benchmark_protocol":3,"status":"offline-run-verified",
+        "entry_profile":context["entry_profile"],"entry_limits":dict(context["entry_limits"]),
         "native_process_run":False,"gpu_workload_run":False,"saved_trial_count":3,
         "build_manifest_sha256":manifest_hash,"source_commit":context["source_commit"],
         "summary":summary,
@@ -772,10 +797,12 @@ def main(argv=None):
         help="Explicitly request three bounded ordinary GPU runs after all checks.")
     modes.add_argument("--verify-run",metavar="RUN",
         help="Verify a completed saved bundle offline, without installed native artifacts.")
+    parser.add_argument("--profile",choices=tuple(ENTRY_PROFILES),default="quiet",
+        help="Entry profile for readiness or --execute (default: quiet). --verify-run uses the saved profile.")
     args=parser.parse_args(argv)
     try:
         root=Path(__file__).absolute().parent
-        output=verify_completed_run(_bundle_path(root,args.verify_run)) if args.verify_run else run(root,execute=args.execute)
+        output=verify_completed_run(_bundle_path(root,args.verify_run)) if args.verify_run else run(root,execute=args.execute,profile=args.profile)
     except KeyboardInterrupt:
         print(json.dumps({"status":"incomplete","reason":"cancelled"}))
         return 130
