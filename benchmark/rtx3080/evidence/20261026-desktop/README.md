@@ -41,8 +41,14 @@ Completion-record SHA-256:
 From the repository root, with Python 3.11:
 
 ```powershell
-py -3.11 .\benchmark\rtx3080\run.py --verify-run .\benchmark\rtx3080\evidence\20261026-desktop\run
+py -3.11 .\benchmark\rtx3080\run.py --verify-run evidence/20261026-desktop/run
 ```
+
+The relative bundle path is resolved beneath `benchmark/rtx3080/`, where
+`run.py` lives, regardless of the terminal's current directory. Do not repeat
+that prefix in the argument. An absolute bundle path is also accepted. See
+[the harness path rules](../../README.md#offline-bundle-paths) for run names
+and other saved bundles.
 
 This checks the saved six-file bundle without GPU queries, CUDA installation
 or native process execution. The original and copied bundles both returned

@@ -130,10 +130,26 @@ The runner bounds stdout/stderr, terminates only its own child on timeout or
 cancellation, and performs no GPU reset. A deadline cannot guarantee recovery
 from a driver hang.
 
+### Offline bundle paths
+
 After an authorized run, `run.py --verify-run <result-directory>` verifies the
 saved completion record, file hashes, trial contract and recomputed summary
 offline. It needs no GPU queries or installed CUDA artifacts. A partial result,
 missing completion record or altered file is rejected.
+
+The runner resolves the bundle argument as follows, independently of the
+terminal's current directory:
+
+- A bare run name resolves beneath `benchmark/rtx3080/results/`.
+- A relative path with directory components resolves beneath
+  `benchmark/rtx3080/`, the directory containing `run.py`.
+- An absolute path is used directly.
+
+For the published evidence, run this from the repository root:
+
+```powershell
+py -3.11 .\benchmark\rtx3080\run.py --verify-run evidence/20261026-desktop/run
+```
 
 Successful output contains `context.json`, three trial files, `summary.json`
 and `complete.json`. The completion record is written last. Failed runs
