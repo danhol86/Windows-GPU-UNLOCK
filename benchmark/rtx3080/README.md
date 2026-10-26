@@ -1,8 +1,11 @@
 # Ordinary CUDA baseline for the inventoried RTX 3080
 
-**Development status: native CUDA compilation and metadata inspection passed.
-A completed GPU benchmark is still pending.**
-See [NATIVE-VALIDATION.md](NATIVE-VALIDATION.md) for the current follow-up and
+**Validation status: native CUDA compilation, metadata inspection and three
+GPU trials passed on the inventoried RTX 3080 using the desktop entry profile.**
+The median results were 21.57 TFLOPS FP32, 60.44 FP16, 60.30 BF16 and 30.60 TF32.
+See [NATIVE-VALIDATION.md](NATIVE-VALIDATION.md) for conditions and numerical
+coverage, the [original measurement evidence](evidence/20261026-desktop/README.md),
+and
 [VALIDATION.md](VALIDATION.md) for the initial CPU-only checks.
 
 This is a separate protocol-3 benchmark for the configuration documented in
@@ -87,7 +90,9 @@ compiler options, the resolved host compiler's version/hash, toolchain versions
 and source commit/dirty state. Build rechecks extracted dependencies and refuses
 ambient `CL`, `_CL_`, `NVCC_PREPEND_FLAGS` or `NVCC_APPEND_FLAGS` options. Their
 values are not recorded. Build never launches the native output. Generated
-packages, binaries, manifests and results are ignored by Git.
+packages, binaries, manifests and results are ignored by Git. A reviewed,
+byte-preserving copy of the completed measurement and metadata is published
+under `evidence/20261026-desktop/`; it contains no executable or toolkit binary.
 Source hashes and the commit are checked before and after compilation so a
 concurrent source edit prevents artifact publication.
 
